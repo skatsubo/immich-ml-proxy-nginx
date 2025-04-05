@@ -1,0 +1,39 @@
+client_body_in_single_buffer on;
+client_body_buffer_size "${MAX_BODY_SIZE}";
+client_max_body_size "${MAX_BODY_SIZE}";
+
+error_log /dev/stderr info;
+
+log_format upstream_logging '[$time_local] $remote_addr "$request" upstream_response_time $upstream_response_time msec $msec request_time $request_time' upstream: "$upstream";
+
+# set DNS resolver as Docker internal DNS
+resolver 127.0.0.11 ipv6=off valid=60s;
+resolver_timeout 5s;
+
+map $request_body $upstream {
+    '~form-data; name="text"' "${ML_TEXT_URL}";
+    '~form-data; name="image"' "${ML_IMAGE_URL}";
+    default "${ML_DEFAULT_URL}";
+}
+
+server {
+    listen 80;
+
+    location /predict {
+        access_log /dev/stdout upstream_logging;
+
+        # $request_body does not work for dynamic proxy_pass. Because with dynamic
+        # proxy_pass Nginx tries to inspect body too early, when it is empty and not buffered in memory yet
+        # This will force early read
+        # https://www.f5.com/company/blog/nginx/deploying-nginx-plus-as-an-api-gateway-part-2-protecting-backend-services
+        mirror /_mirror_request_body;
+
+        proxy_set_header X-Upstream $upstream;
+        proxy_pass $upstream;
+    }
+
+    # dummy location
+    location /_mirror_request_body {
+        return 204;
+    }
+}
